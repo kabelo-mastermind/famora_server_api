@@ -251,3 +251,67 @@ app.get('/tools/fetch', async (req, res) => {
 
 const port = process.env.PORT || 4000
 app.listen(port, () => console.log(`famora_server_api listening on ${port}`))
+
+// --- Realtime stream (SSE) helper ---
+// GET /realtime/stream?path=/users/<uid>/data
+// Streams JSON snapshots whenever the RTDB path changes.
+const sseListeners = new Map()
+
+app.get('/realtime/stream', (req, res) => {
+  if (!rdb) return res.status(500).json({ error: 'Realtime Database not initialized' })
+  const raw = req.query.path || req.query.p
+  if (!raw) return res.status(400).json({ error: 'Missing `path` query parameter' })
+  const path = String(raw).replace(/^\/*/, '')
+
+  // set SSE headers
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  })
+  res.flushHeaders()
+
+  // utility to send an event
+  const send = (obj) => {
+    try {
+      res.write(`data: ${JSON.stringify(obj)}\n\n`)
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // If we already have an RTDB listener for this path, reuse it
+  let entry = sseListeners.get(path)
+  if (!entry) {
+    const clients = new Set()
+    const ref = rdb.ref(path)
+    const handler = (snap) => {
+      const val = snap.val()
+      // broadcast to all connected clients
+      for (const c of clients) {
+        try { c.write(`data: ${JSON.stringify({ path: `/${path}`, data: val })}\n\n`) } catch (e) { /* ignore */ }
+      }
+    }
+    // listen for full value updates
+    ref.on('value', handler)
+    entry = { ref, handler, clients }
+    sseListeners.set(path, entry)
+  }
+
+  // add this response as a client
+  entry.clients.add(res)
+
+  // send initial snapshot once
+  entry.ref.once('value').then((snap) => send({ path: `/${path}`, data: snap.val() })).catch(() => {})
+
+  // when client closes, remove it and clean up listener if no clients remain
+  req.on('close', () => {
+    entry.clients.delete(res)
+    try { res.end() } catch (e) {}
+    if (entry.clients.size === 0) {
+      // detach listener and remove map entry
+      entry.ref.off('value', entry.handler)
+      sseListeners.delete(path)
+    }
+  })
+})

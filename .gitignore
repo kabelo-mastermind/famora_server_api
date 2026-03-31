@@ -11,6 +11,13 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.example
+
+# Ignore local Firebase service account
+serviceAccount.json
+# Ignore local env with secrets
+
 
 # Editor directories and files
 .vscode/*

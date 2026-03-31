@@ -10,22 +10,50 @@ app.use(cors())
 app.use(express.json())
 
 // Initialize Firebase Admin
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+// Support multiple deployment patterns:
+// 1) FIREBASE_SERVICE_ACCOUNT: JSON string of the service account (not recommended for easy typing)
+// 2) FIREBASE_SERVICE_ACCOUNT_B64: base64-encoded JSON (recommended for env values)
+// 3) GOOGLE_APPLICATION_CREDENTIALS: path to service account JSON on filesystem (local dev)
+let initialized = false
+let serviceAccount = null
+if (process.env.FIREBASE_SERVICE_ACCOUNT_B64) {
   try {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+    const decoded = Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_B64, 'base64').toString('utf8')
+    serviceAccount = JSON.parse(decoded)
+  } catch (err) {
+    console.error('Invalid FIREBASE_SERVICE_ACCOUNT_B64:', err.message)
+  }
+} else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  try {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
+  } catch (err) {
+    console.error('Invalid FIREBASE_SERVICE_ACCOUNT JSON:', err.message)
+  }
+}
+
+if (serviceAccount) {
+  try {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
       projectId: process.env.FIREBASE_PROJECT_ID || serviceAccount.project_id,
     })
-    console.log('Firebase Admin initialized from FIREBASE_SERVICE_ACCOUNT')
+    console.log('Firebase Admin initialized from service account env')
+    initialized = true
   } catch (err) {
-    console.error('Invalid FIREBASE_SERVICE_ACCOUNT JSON:', err.message)
+    console.error('Failed to initialize Firebase Admin from service account:', err.message)
   }
 } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-  admin.initializeApp()
-  console.log('Firebase Admin initialized from GOOGLE_APPLICATION_CREDENTIALS')
-} else {
-  console.warn('No Firebase credentials found. Set FIREBASE_SERVICE_ACCOUNT or GOOGLE_APPLICATION_CREDENTIALS.')
+  try {
+    admin.initializeApp()
+    console.log('Firebase Admin initialized from GOOGLE_APPLICATION_CREDENTIALS')
+    initialized = true
+  } catch (err) {
+    console.error('Failed to initialize Firebase Admin from GOOGLE_APPLICATION_CREDENTIALS:', err.message)
+  }
+}
+
+if (!initialized) {
+  console.error('No Firebase credentials found. Set FIREBASE_SERVICE_ACCOUNT_B64, FIREBASE_SERVICE_ACCOUNT, or GOOGLE_APPLICATION_CREDENTIALS.')
 }
 
 const db = admin.app ? admin.firestore() : null
